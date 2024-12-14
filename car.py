@@ -1,163 +1,256 @@
-import sqlite3
-from tkinter import *
-from tkinter import messagebox
+import tkinter as tk
+from tkinter import messagebox, simpledialog, filedialog
+import os
+import csv
+import shutil
 
-class BD:
-    def __init__(self):
-        self.conn = sqlite3.connect("car_sharing.db")
-        self.cur = self.conn.cursor()
-        self.cur.execute('''CREATE TABLE IF NOT EXISTS rentals (
-                            id INTEGER PRIMARY KEY, 
-                            car_model TEXT, 
-                            rental_duration TEXT, 
-                            cost TEXT, 
-                            user_comment TEXT)''')
-        self.cur.execute('''CREATE INDEX IF NOT EXISTS idx_car_model ON rentals (car_model)''')
-        self.cur.execute('''CREATE INDEX IF NOT EXISTS idx_cost ON rentals (cost)''')
-        self.conn.commit()
+FILE_NAME = "data.csv"
+INDEX_FILE = "index.txt"
 
-    def __del__(self):
-        self.conn.close()
+def initialize_database():
+    if not os.path.exists(FILE_NAME):
+        with open(FILE_NAME, 'w', newline='', encoding='utf-8') as file:
+            writer = csv.writer(file)
+            writer.writerow(["State number", "Stamp", "Year of release", "Mileage"])
+    if not os.path.exists(INDEX_FILE):
+        with open(INDEX_FILE, 'w', encoding='utf-8') as file:
+            file.write("")
 
-    def view(self):
-        self.cur.execute("SELECT * FROM rentals")
-        rows = self.cur.fetchall()
-        return rows
+def build_index():
+    index = []
+    with open(FILE_NAME, 'r', encoding='utf-8') as file:
+        reader = csv.reader(file)
+        next(reader)
+        for line_num, row in enumerate(reader, start=2):
+            state_number = row[0]
+            index.append((state_number, line_num))
 
-    def insert(self, car_model, rental_duration, cost, user_comment):
-        self.cur.execute("INSERT INTO rentals (car_model, rental_duration, cost, user_comment) VALUES (?, ?, ?, ?)",
-                         (car_model, rental_duration, cost, user_comment))
-        self.conn.commit()
+    index.sort()
 
-    def update(self, id, car_model, rental_duration, cost, user_comment):
-        self.cur.execute("UPDATE rentals SET car_model=?, rental_duration=?, cost=?, user_comment=? WHERE id=?",
-                         (car_model, rental_duration, cost, user_comment, id))
-        self.conn.commit()
+    with open(INDEX_FILE, 'w', encoding='utf-8') as file:
+        for state_number, line_num in index:
+            file.write(f"{state_number},{line_num}\n")
 
-    def delete(self, id):
-        self.cur.execute("DELETE FROM rentals WHERE id=?", (id,))
-        self.conn.commit()
+def binary_search_in_index(file_name, search_value):
+    with open(file_name, 'r', encoding='utf-8') as file:
+        lines = file.readlines()
+        left, right = 0, len(lines) - 1
 
-    def search(self, car_model="", cost=""):
-        self.cur.execute("SELECT * FROM rentals WHERE car_model LIKE ? OR cost LIKE ?",
-                         (f"%{car_model}%", f"%{cost}%"))
-        rows = self.cur.fetchall()
-        return rows
+        while left <= right:
+            mid = (left + right) // 2
+            line = lines[mid].strip()
+            state_number, line_num = line.split(',')
 
+            if search_value == state_number:
+                return int(line_num)
+            elif search_value < state_number:
+                right = mid - 1
+            else:
+                left = mid + 1
 
-bd = BD()
+    return None
 
-def get_selected_row(event):
-    global selected_tuple
-    try:
-        index = list1.curselection()[0]
-        selected_tuple = list1.get(index)
-        e1.delete(0, END)
-        e1.insert(END, selected_tuple[1])
-        e2.delete(0, END)
-        e2.insert(END, selected_tuple[2])
-        e3.delete(0, END)
-        e3.insert(END, selected_tuple[3])
-        e4.delete(0, END)
-        e4.insert(END, selected_tuple[4])
-    except IndexError:
-        selected_tuple = None
+def search_records(display_area, reset_button):
+    search_value = simpledialog.askstring("Поиск", "Введите гос номер для поиска:")
+    if not search_value:
+        return
 
-def view_command():
-    list1.delete(0, END)
-    for row in bd.view():
-        list1.insert(END, row)
+    line_num = binary_search_in_index(INDEX_FILE, search_value)
 
-def search_command():
-    list1.delete(0, END)
-    for row in bd.search(car_model.get(), cost.get()):
-        list1.insert(END, row)
-
-def add_command():
-    bd.insert(car_model.get(), rental_duration.get(), cost.get(), user_comment.get())
-    view_command()
-
-def delete_command():
-    global selected_tuple
-    if selected_tuple is None:
-        messagebox.showwarning("Ошибка", "Выберите запись для удаления!")
+    if line_num is not None:
+        with open(FILE_NAME, 'r', encoding='utf-8') as file:
+            for current_line_num, row in enumerate(file, start=1):
+                if current_line_num == line_num:
+                    display_area.config(state=tk.NORMAL)
+                    display_area.delete(1.0, tk.END)
+                    display_area.insert(tk.END, row)
+                    display_area.config(state=tk.DISABLED)
+                    reset_button.config(state=tk.NORMAL)
+                    return
+        messagebox.showerror("Ошибка", "Запись не найдена в файле данных!")
     else:
-        bd.delete(selected_tuple[0])
-        view_command()
-        selected_tuple = None
+        messagebox.showerror("Ошибка", "Запись с таким гос номером не найдена!")
 
-def update_command():
-    global selected_tuple
-    if selected_tuple is not None:
-        bd.update(selected_tuple[0], car_model.get(), rental_duration.get(), cost.get(), user_comment.get())
-        view_command()
+def reset_search(display_area, reset_button):
+    display_all_records(display_area)
+    reset_button.config(state=tk.DISABLED)
 
-window = Tk()
-window.title("Каршеринг 1.0")
+def add_record(number_field, stamp_field, year_field, mil_field, display_area):
+    number = number_field.get().strip()
+    stamp = stamp_field.get().strip()
+    year_rel = year_field.get().strip()
+    mil = mil_field.get().strip()
 
-def on_closing():
-    if messagebox.askokcancel("", "Закрыть программу?"):
-        window.destroy()
+    if not (number and stamp and year_rel and mil):
+        messagebox.showerror("Ошибка", "Все поля должны быть заполнены!")
+        return
 
-window.protocol("WM_DELETE_WINDOW", on_closing)
+    records = []
+    with open(FILE_NAME, 'r', encoding='utf-8') as file:
+        reader = csv.reader(file)
+        for row in reader:
+            if row:
+                records.append(row)
 
-l1 = Label(window, text="Модель автомобиля")
-l1.grid(row=0, column=0)
+    left, right = 0, len(records) - 1
+    insert_pos = len(records)
+    while left <= right:
+        mid = (left + right) // 2
+        if records[mid][0] < number:
+            left = mid + 1
+        else:
+            right = mid - 1
+            insert_pos = mid
 
-l2 = Label(window, text="Длительность аренды (часы)")
-l2.grid(row=1, column=0)
+    records.insert(insert_pos, [number, stamp, year_rel, mil])
 
-l3 = Label(window, text="Стоимость аренды")
-l3.grid(row=2, column=0)
+    with open(FILE_NAME, 'w', newline='', encoding='utf-8') as file:
+        writer = csv.writer(file)
+        if len(records) > 1:
+            writer.writerows(records)
+        else:
+            writer.writerow(["State number", "Stamp", "Year of release", "Mileage"])
+            writer.writerows(records[1:])
 
-l4 = Label(window, text="Комментарий")
-l4.grid(row=3, column=0)
+    build_index()
+    messagebox.showinfo("Успех", "Запись добавлена!")
+    display_all_records(display_area)
 
-car_model = StringVar()
-e1 = Entry(window, textvariable=car_model)
-e1.grid(row=0, column=1)
+def display_all_records(display_area):
+    records = []
+    with open(FILE_NAME, 'r', encoding='utf-8') as file:
+        reader = csv.reader(file)
+        for row in reader:
+            if row:
+                records.append(', '.join(row))
 
-rental_duration = StringVar()
-e2 = Entry(window, textvariable=rental_duration)
-e2.grid(row=1, column=1)
+    display_area.config(state=tk.NORMAL)
+    display_area.delete(1.0, tk.END)
+    if records:
+        display_area.insert(tk.END, "\n".join(records))
+    else:
+        display_area.insert(tk.END, "База данных пуста.")
+    display_area.config(state=tk.DISABLED)
 
-cost = StringVar()
-e3 = Entry(window, textvariable=cost)
-e3.grid(row=2, column=1)
+def delete_record(display_area):
+    num = simpledialog.askstring("Удаление", "Введите гос номер для удаления:")
+    if not num:
+        return
 
-user_comment = StringVar()
-e4 = Entry(window, textvariable=user_comment)
-e4.grid(row=3, column=1)
+    records = []
+    deleted = False
+    with open(FILE_NAME, 'r', encoding='utf-8') as file:
+        reader = csv.reader(file)
+        for row in reader:
+            if row and row[0] == num:
+                deleted = True
+            else:
+                records.append(row)
 
-list1 = Listbox(window, height=15, width=65)
-list1.grid(row=4, column=0, rowspan=6, columnspan=2)
+    if deleted:
+        with open(FILE_NAME, 'w', newline='', encoding='utf-8') as file:
+            writer = csv.writer(file)
+            writer.writerows(records)
 
-sb1 = Scrollbar(window)
-sb1.grid(row=2, column=2, rowspan=6)
+        build_index()
 
-list1.configure(yscrollcommand=sb1.set)
-sb1.configure(command=list1.yview)
+        messagebox.showinfo("Успех", "Запись удалена!")
+    else:
+        messagebox.showerror("Ошибка", "Запись с таким гос номером не найдена!")
 
-list1.bind('<<ListboxSelect>>', get_selected_row)
+    display_all_records(display_area)
 
-b1 = Button(window, text="Посмотреть все", width=12, command=view_command)
-b1.grid(row=2, column=3)
+def update_record(display_area):
+    num = simpledialog.askstring("Редактирование", "Введите гос номер для редактирования:")
+    if not num:
+        return
 
-b2 = Button(window, text="Поиск", width=12, command=search_command)
-b2.grid(row=3, column=3)
+    records = []
+    updated = False
+    with open(FILE_NAME, 'r', encoding='utf-8') as file:
+        reader = csv.reader(file)
+        for row in reader:
+            if row and row[0] == num:
+                new_stamp = simpledialog.askstring("Редактирование", "Введите новую марку:")
+                new_year = simpledialog.askstring("Редактирование", "Введите новый год выпуска:")
+                new_mil = simpledialog.askstring("Редактирование", "Введите новый пробег:")
+                row = [num, new_stamp, new_year, new_mil]
+                updated = True
+            records.append(row)
 
-b3 = Button(window, text="Добавить", width=12, command=add_command)
-b3.grid(row=4, column=3)
+    if updated:
+        with open(FILE_NAME, 'w', newline='', encoding='utf-8') as file:
+            writer = csv.writer(file)
+            writer.writerows(records)
 
-b4 = Button(window, text="Обновить", width=12, command=update_command)
-b4.grid(row=5, column=3)
+        build_index()
 
-b5 = Button(window, text="Удалить", width=12, command=delete_command)
-b5.grid(row=6, column=3)
+        messagebox.showinfo("Успех", "Запись обновлена!")
+    else:
+        messagebox.showerror("Ошибка", "Запись с таким гос номер не найдена!")
 
-b6 = Button(window, text="Закрыть", width=12, command=on_closing)
-b6.grid(row=7, column=3)
+    display_all_records(display_area)
 
-view_command()
+def create_backup():
+    backup_file = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[("CSV files", "*.csv")])
+    if backup_file:
+        shutil.copy(FILE_NAME, backup_file)
+        messagebox.showinfo("Успех", "Резервная копия создана!")
 
-window.mainloop()
+def restore_backup(display_area):
+    backup_file = filedialog.askopenfilename(filetypes=[("CSV files", "*.csv")])
+    if backup_file:
+        shutil.copy(backup_file, FILE_NAME)
+        messagebox.showinfo("Успех", "База данных восстановлена!")
+        build_index()
+    display_all_records(display_area)
+
+def setup_gui(root):
+    panel = tk.Frame(root)
+    panel.pack(fill=tk.X)
+
+    number_field = tk.Entry(panel)
+    stamp_field = tk.Entry(panel)
+    year_field = tk.Entry(panel)
+    mil_field = tk.Entry(panel)
+
+    tk.Label(panel, text="State number").grid(row=0, column=0)
+    number_field.grid(row=0, column=1)
+    tk.Label(panel, text="Stamp").grid(row=1, column=0)
+    stamp_field.grid(row=1, column=1)
+    tk.Label(panel, text="Year of release").grid(row=2, column=0)
+    year_field.grid(row=2, column=1)
+    tk.Label(panel, text="Mileage").grid(row=3, column=0)
+    mil_field.grid(row=3, column=1)
+
+    buttons_panel = tk.Frame(root)
+    buttons_panel.pack(fill=tk.X)
+
+    display_area = tk.Text(root, state=tk.DISABLED)
+    display_area.pack(fill=tk.BOTH, expand=True)
+
+    reset_button = tk.Button(buttons_panel, text="Сбросить результаты поиска", state=tk.DISABLED,
+                             command=lambda: reset_search(display_area, reset_button))
+    reset_button.grid(row=0, column=6)
+    tk.Button(buttons_panel, text="Добавить запись",
+              command=lambda: add_record(number_field, stamp_field, year_field, mil_field, display_area)).grid(row=0,
+                                                                                                               column=0)
+    tk.Button(buttons_panel, text="Поиск", command=lambda: search_records(display_area, reset_button)).grid(row=0,
+                                                                                                            column=1)
+    tk.Button(buttons_panel, text="Удалить запись", command=lambda: delete_record(display_area)).grid(row=0, column=2)
+    tk.Button(buttons_panel, text="Редактировать запись", command=lambda: update_record(display_area)).grid(row=0,
+                                                                                                            column=3)
+    tk.Button(buttons_panel, text="Создать резервную копию", command=create_backup).grid(row=0, column=4)
+    tk.Button(buttons_panel, text="Восстановить из копии", command=lambda: restore_backup(display_area)).grid(row=0,
+                                                                                                              column=5)
+
+    display_all_records(display_area)
+    return number_field, stamp_field, year_field, mil_field, display_area, reset_button
+
+
+root = tk.Tk()
+root.title("Файловая база данных автомобилей")
+initialize_database()
+build_index()
+setup_gui(root)
+root.mainloop()
